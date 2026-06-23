@@ -47,7 +47,7 @@ TeamModules/
 
 ## Team Members
 
-- Shrouk – Project Lead / Hardware connections/ Movement control/ Integration
+- Shrouk – Project Lead / Hardware connections/ Movement control
 - Hazem - Web Dashboard
 - Menna – OLED Expressions
 - Shehab – Hardware Design
