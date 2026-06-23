@@ -1,0 +1,514 @@
+/*
+ * ============================================================================
+ *  Agricultural Spider Robot - IoT Control Dashboard
+ *  ESP32 PROGMEM HTML Header File (Arduino IDE compatible)
+ * ============================================================================
+ *
+ *  File:           dashboard_html.h
+ *  Target:         ESP32 (Arduino Core)
+ *  Purpose:        Serves a single-page control dashboard from the ESP32's
+ *                  web server. The dashboard connects via MQTT over WebSocket
+ *                  to broker.hivemq.com:8884 (WSS) and publishes/subscribes
+ *                  to the spider/* topic tree.
+ *
+ *  Topics:
+ *      Publish     spider/move       (forward | backward | left | right | stop)
+ *      Publish     spider/behavior   (stand | sleep | highfive | happy | wave | dance)
+ *      Publish     spider/tool       (sprayer_on | sprayer_off | cutter_on | cutter_off)
+ *      Subscribe   spider/status     (JSON: {battery, wifi, state, sprayer, cutter})
+ *
+ *  Usage:
+ *      1. #include "dashboard_html.h" in your main .ino sketch
+ *      2. Serve DASHBOARD_HTML from your web server route handler, e.g.:
+ *
+ *          server.on("/", HTTP_GET, [](AsyncWebServerRequest *req){
+ *              req->send_P(200, "text/html", DASHBOARD_HTML);
+ *          });
+ *
+ *      3. Flash to ESP32, open the serial monitor for the assigned IP,
+ *         then visit http://<esp32-ip>/ in any modern browser.
+ *
+ *  Dependencies (loaded by the dashboard itself, no ESP32 install required):
+ *      - mqtt.js  (CDN: https://unpkg.com/mqtt@4.3.7/dist/mqtt.min.js)
+ *
+ *  Author: Graduation Project - Agricultural Spider Robot
+ * ============================================================================
+ */
+#ifndef DASHBOARD_HTML_H
+#define DASHBOARD_HTML_H
+
+const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#07090d">
+<title>Spider Robot | Control Dashboard</title>
+<style>
+:root{
+  --bg-0:#07090d; --bg-1:#0d1117; --bg-2:#161b22; --bg-3:#1f2630;
+  --border:#2a3441; --border-hi:#3a4759;
+  --text-0:#f0f6fc; --text-1:#c9d1d9; --text-2:#8b949e;
+  --accent:#00e5ff; --accent-dim:#00b8d4;
+  --success:#00ff9d; --warning:#ffb000; --danger:#ff3b5c;
+  --purple:#a371f7;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;user-select:none}
+html,body{height:100%;width:100%;font-family:'Inter','Segoe UI',-apple-system,BlinkMacSystemFont,Roboto,sans-serif;background:var(--bg-0);color:var(--text-1);overflow-x:hidden}
+body{
+  background:
+    radial-gradient(circle at 18% 8%,rgba(0,229,255,.07) 0%,transparent 50%),
+    radial-gradient(circle at 82% 92%,rgba(163,113,247,.06) 0%,transparent 50%),
+    linear-gradient(180deg,var(--bg-0) 0%,var(--bg-1) 100%);
+  background-attachment:fixed;min-height:100vh;padding:16px;
+}
+body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(0,229,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(0,229,255,.025) 1px,transparent 1px);background-size:40px 40px;pointer-events:none;z-index:0}
+.container{max-width:1400px;margin:0 auto;position:relative;z-index:1}
+.header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;background:linear-gradient(135deg,rgba(22,27,34,.92) 0%,rgba(15,20,26,.92) 100%);border:1px solid var(--border);border-radius:14px;backdrop-filter:blur(10px);margin-bottom:16px;flex-wrap:wrap;gap:12px}
+.logo{display:flex;align-items:center;gap:12px}
+.logo-icon{width:44px;height:44px;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,var(--accent) 0%,var(--accent-dim) 100%);border-radius:11px;font-size:24px;color:var(--bg-0);box-shadow:0 0 22px rgba(0,229,255,.45)}
+.logo-text h1{font-size:16px;font-weight:700;color:var(--text-0);letter-spacing:.5px}
+.logo-text p{font-size:11px;color:var(--text-2);letter-spacing:1.5px;text-transform:uppercase;margin-top:2px}
+.status-bar{display:flex;gap:10px;flex-wrap:wrap}
+.status-pill{display:flex;align-items:center;gap:8px;padding:8px 14px;background:var(--bg-2);border:1px solid var(--border);border-radius:999px;font-size:12px;font-weight:600;color:var(--text-1);transition:all .3s ease}
+.status-dot{width:8px;height:8px;border-radius:50%;background:var(--danger);box-shadow:0 0 8px var(--danger);animation:pulse 2s infinite}
+.status-pill.online .status-dot{background:var(--success);box-shadow:0 0 8px var(--success)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.grid{display:grid;grid-template-columns:320px 1fr 360px;gap:16px}
+@media(max-width:1100px){.grid{grid-template-columns:1fr 1fr}}
+@media(max-width:720px){.grid{grid-template-columns:1fr}}
+.card{background:linear-gradient(135deg,rgba(22,27,34,.85) 0%,rgba(15,20,26,.85) 100%);border:1px solid var(--border);border-radius:14px;padding:20px;backdrop-filter:blur(10px);position:relative;overflow:hidden}
+.card::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,var(--accent),transparent);opacity:.6}
+.card-title{display:flex;align-items:center;gap:8px;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--text-2);margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)}
+.card-title .bar{width:4px;height:14px;background:var(--accent);border-radius:2px;box-shadow:0 0 8px var(--accent)}
+.dpad{display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);gap:8px;max-width:280px;margin:0 auto;aspect-ratio:1}
+.dpad-btn{background:linear-gradient(135deg,var(--bg-3) 0%,var(--bg-2) 100%);border:1px solid var(--border);border-radius:12px;color:var(--text-1);font-size:26px;cursor:pointer;transition:all .15s ease;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden;touch-action:manipulation}
+.dpad-btn:active,.dpad-btn.active{background:linear-gradient(135deg,var(--accent) 0%,var(--accent-dim) 100%);color:var(--bg-0);border-color:var(--accent);box-shadow:0 0 22px rgba(0,229,255,.55);transform:scale(.95)}
+.dpad-btn.forward{grid-column:2;grid-row:1}
+.dpad-btn.left{grid-column:1;grid-row:2}
+.dpad-btn.stop{grid-column:2;grid-row:2;font-size:11px;font-weight:700;letter-spacing:1px}
+.dpad-btn.right{grid-column:3;grid-row:2}
+.dpad-btn.backward{grid-column:2;grid-row:3}
+.telemetry-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.telemetry-item{background:var(--bg-2);border:1px solid var(--border);border-radius:10px;padding:14px;transition:border-color .25s ease}
+.telemetry-item:hover{border-color:var(--border-hi)}
+.telemetry-label{font-size:10px;color:var(--text-2);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px}
+.telemetry-value{font-size:20px;font-weight:700;color:var(--text-0)}
+.battery-container{grid-column:span 2}
+.battery-bar{height:8px;background:var(--bg-3);border-radius:4px;overflow:hidden;margin-top:8px;position:relative}
+.battery-fill{height:100%;background:linear-gradient(90deg,var(--success),var(--accent));border-radius:4px;transition:width .5s ease,background .3s ease;box-shadow:0 0 10px currentColor;width:0%}
+.battery-fill.low{background:linear-gradient(90deg,var(--warning),#ff8800)}
+.battery-fill.critical{background:linear-gradient(90deg,var(--danger),#cc2e4a)}
+.behavior-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.behavior-btn{background:linear-gradient(135deg,var(--bg-3) 0%,var(--bg-2) 100%);border:1px solid var(--border);border-radius:10px;padding:14px 12px;color:var(--text-1);font-size:13px;font-weight:600;cursor:pointer;transition:all .2s ease;text-align:center;touch-action:manipulation}
+.behavior-btn:active,.behavior-btn.active{background:linear-gradient(135deg,var(--purple) 0%,#8957e5 100%);border-color:var(--purple);color:#fff;transform:scale(.95);box-shadow:0 0 22px rgba(163,113,247,.45)}
+.tools-section{margin-top:18px}
+.tool-group{margin-bottom:14px}
+.tool-group:last-child{margin-bottom:0}
+.tool-label{font-size:11px;color:var(--text-2);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px}
+.tool-btn-group{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.tool-btn{padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--bg-2);color:var(--text-1);font-size:12px;font-weight:700;cursor:pointer;transition:all .2s ease;text-transform:uppercase;letter-spacing:1px;touch-action:manipulation}
+.tool-btn.active-on{background:linear-gradient(135deg,var(--success) 0%,#00cc7a 100%);border-color:var(--success);color:var(--bg-0);box-shadow:0 0 18px rgba(0,255,157,.45)}
+.tool-btn.active-off{background:linear-gradient(135deg,var(--danger) 0%,#cc2e4a 100%);border-color:var(--danger);color:#fff;box-shadow:0 0 18px rgba(255,59,92,.45)}
+.last-command{margin-top:14px;padding:12px 14px;background:var(--bg-2);border:1px solid var(--border);border-radius:10px;display:flex;align-items:center;justify-content:space-between;font-family:'SF Mono',Monaco,Consolas,monospace;font-size:12px;gap:10px}
+.last-command .label{color:var(--text-2);text-transform:uppercase;letter-spacing:1px;font-size:10px;white-space:nowrap}
+.last-command .value{color:var(--accent);font-weight:700;text-align:right;word-break:break-all}
+.event-log{margin-top:14px;background:var(--bg-2);border:1px solid var(--border);border-radius:10px;padding:12px;height:180px;overflow-y:auto;font-family:'SF Mono',Monaco,Consolas,monospace;font-size:11px;line-height:1.6}
+.event-log::-webkit-scrollbar{width:6px}
+.event-log::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+.event-log::-webkit-scrollbar-thumb:hover{background:var(--border-hi)}
+.log-line{display:flex;gap:8px;padding:2px 0;border-bottom:1px solid rgba(42,52,65,.4)}
+.log-time{color:var(--text-2);white-space:nowrap;flex-shrink:0}
+.log-msg{color:var(--text-1);word-break:break-all}
+.log-msg.info{color:var(--accent)}
+.log-msg.success{color:var(--success)}
+.log-msg.warn{color:var(--warning)}
+.log-msg.error{color:var(--danger)}
+.footer{text-align:center;padding:20px 10px;color:var(--text-2);font-size:11px;letter-spacing:1.5px}
+.kbd-hint{margin-top:12px;font-size:10px;color:var(--text-2);text-align:center;letter-spacing:1px;text-transform:uppercase}
+@media(max-width:720px){
+  body{padding:10px}
+  .header{padding:12px}
+  .logo-text h1{font-size:14px}
+  .logo-text p{font-size:10px}
+  .card{padding:16px}
+  .dpad{max-width:240px}
+  .telemetry-value{font-size:18px}
+  .status-pill{font-size:11px;padding:6px 10px}
+}
+@media(max-width:420px){
+  .logo-icon{width:38px;height:38px;font-size:20px}
+  .logo-text h1{font-size:12px}
+  .logo-text p{display:none}
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+  <header class="header">
+    <div class="logo">
+      <div class="logo-icon">&#128375;</div>
+      <div class="logo-text">
+        <h1>AGRICULTURAL SPIDER ROBOT</h1>
+        <p>IoT Control Dashboard &middot; v1.0</p>
+      </div>
+    </div>
+    <div class="status-bar">
+      <div class="status-pill" id="mqttStatus">
+        <span class="status-dot"></span>
+        <span class="pill-text">MQTT &middot; OFFLINE</span>
+      </div>
+      <div class="status-pill" id="wifiStatus">
+        <span class="status-dot"></span>
+        <span class="pill-text">WIFI &middot; UNKNOWN</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="grid">
+
+    <!-- Movement -->
+    <section class="card">
+      <div class="card-title"><span class="bar"></span><span>Movement Control</span></div>
+      <div class="dpad">
+        <button class="dpad-btn forward" data-move="forward" aria-label="Forward">&#9650;</button>
+        <button class="dpad-btn left"    data-move="left"    aria-label="Left">&#9664;</button>
+        <button class="dpad-btn stop"    data-move="stop"    aria-label="Stop">STOP</button>
+        <button class="dpad-btn right"   data-move="right"   aria-label="Right">&#9654;</button>
+        <button class="dpad-btn backward" data-move="backward" aria-label="Backward">&#9660;</button>
+      </div>
+      <div class="kbd-hint">Arrow keys &middot; Space = Stop</div>
+    </section>
+
+    <!-- Telemetry + Event Log -->
+    <section class="card">
+      <div class="card-title"><span class="bar"></span><span>Live Telemetry</span></div>
+      <div class="telemetry-grid">
+        <div class="telemetry-item battery-container">
+          <div class="telemetry-label">Battery</div>
+          <div class="telemetry-value"><span id="batteryVal">--</span>%</div>
+          <div class="battery-bar"><div class="battery-fill" id="batteryFill"></div></div>
+        </div>
+        <div class="telemetry-item">
+          <div class="telemetry-label">Robot State</div>
+          <div class="telemetry-value" id="stateVal">--</div>
+        </div>
+        <div class="telemetry-item">
+          <div class="telemetry-label">Sprayer</div>
+          <div class="telemetry-value" id="sprayerVal">--</div>
+        </div>
+        <div class="telemetry-item">
+          <div class="telemetry-label">Cutter</div>
+          <div class="telemetry-value" id="cutterVal">--</div>
+        </div>
+        <div class="telemetry-item">
+          <div class="telemetry-label">WiFi Signal</div>
+          <div class="telemetry-value" id="wifiVal">--</div>
+        </div>
+      </div>
+      <div class="last-command">
+        <span class="label">Last Command</span>
+        <span class="value" id="lastCmd">none</span>
+      </div>
+      <div class="event-log" id="eventLog"></div>
+    </section>
+
+    <!-- Behavior & Tools -->
+    <section class="card">
+      <div class="card-title"><span class="bar"></span><span>Behavior &amp; Tools</span></div>
+      <div class="behavior-grid">
+        <button class="behavior-btn" data-behavior="stand">Stand</button>
+        <button class="behavior-btn" data-behavior="sleep">Sleep</button>
+        <button class="behavior-btn" data-behavior="highfive">High Five</button>
+        <button class="behavior-btn" data-behavior="happy">Happy</button>
+        <button class="behavior-btn" data-behavior="wave">Wave</button>
+        <button class="behavior-btn" data-behavior="dance">Dance</button>
+      </div>
+
+      <div class="tools-section">
+        <div class="tool-group">
+          <div class="tool-label">Sprayer</div>
+          <div class="tool-btn-group" data-tool-group="sprayer">
+            <button class="tool-btn" data-tool="sprayer_on">ON</button>
+            <button class="tool-btn" data-tool="sprayer_off">OFF</button>
+          </div>
+        </div>
+        <div class="tool-group">
+          <div class="tool-label">Cutter</div>
+          <div class="tool-btn-group" data-tool-group="cutter">
+            <button class="tool-btn" data-tool="cutter_on">ON</button>
+            <button class="tool-btn" data-tool="cutter_off">OFF</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <footer class="footer">
+    AGRICULTURAL SPIDER ROBOT &middot; ESP32 &middot; MQTT OVER WEBSOCKET &middot; GRADUATION PROJECT
+  </footer>
+
+</div>
+
+<script src="https://unpkg.com/mqtt@4.3.7/dist/mqtt.min.js"></script>
+<script>
+(function(){
+  'use strict';
+
+  /* ---------- MQTT Configuration ---------- */
+  var BROKER_URL  = 'wss://broker.hivemq.com:8884/mqtt';
+  var CLIENT_PREFIX = 'spider_web_';
+  var TOPICS = {
+    move:     'spider/move',
+    behavior: 'spider/behavior',
+    tool:     'spider/tool',
+    status:   'spider/status'
+  };
+
+  /* ---------- DOM References ---------- */
+  var logEl       = document.getElementById('eventLog');
+  var lastCmdEl   = document.getElementById('lastCmd');
+  var mqttPill    = document.getElementById('mqttStatus');
+  var wifiPill    = document.getElementById('wifiStatus');
+  var batteryVal  = document.getElementById('batteryVal');
+  var batteryFill = document.getElementById('batteryFill');
+  var stateVal    = document.getElementById('stateVal');
+  var sprayerVal  = document.getElementById('sprayerVal');
+  var cutterVal   = document.getElementById('cutterVal');
+  var wifiVal     = document.getElementById('wifiVal');
+
+  var client = null;
+  var lastSprayerState = null;
+  var lastCutterState  = null;
+
+  /* ---------- Utilities ---------- */
+  function pad(n){ return n < 10 ? '0' + n : '' + n; }
+  function ts(){
+    var d = new Date();
+    return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+  }
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"']/g, function(c){
+      return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
+    });
+  }
+  function log(msg, type){
+    type = type || '';
+    var line = document.createElement('div');
+    line.className = 'log-line';
+    line.innerHTML = '<span class="log-time">[' + ts() + ']</span>' +
+                     '<span class="log-msg ' + type + '">' + escapeHtml(msg) + '</span>';
+    logEl.appendChild(line);
+    logEl.scrollTop = logEl.scrollHeight;
+    while(logEl.children.length > 200) logEl.removeChild(logEl.firstChild);
+  }
+  function setLastCmd(topic, payload){
+    lastCmdEl.textContent = topic + ' \u2192 ' + payload;
+  }
+  function setMqttStatus(online){
+    if(online){
+      mqttPill.classList.add('online');
+      mqttPill.querySelector('.pill-text').textContent = 'MQTT \u00b7 CONNECTED';
+    } else {
+      mqttPill.classList.remove('online');
+      mqttPill.querySelector('.pill-text').textContent = 'MQTT \u00b7 OFFLINE';
+    }
+  }
+  function setWifiStatus(online){
+    if(online){
+      wifiPill.classList.add('online');
+      wifiPill.querySelector('.pill-text').textContent = 'WIFI \u00b7 CONNECTED';
+    } else {
+      wifiPill.classList.remove('online');
+      wifiPill.querySelector('.pill-text').textContent = 'WIFI \u00b7 LOST';
+    }
+  }
+  function updateBattery(pct){
+    pct = Math.max(0, Math.min(100, parseInt(pct, 10) || 0));
+    batteryVal.textContent = pct;
+    batteryFill.style.width = pct + '%';
+    batteryFill.classList.remove('low','critical');
+    if(pct < 20) batteryFill.classList.add('critical');
+    else if(pct < 40) batteryFill.classList.add('low');
+  }
+  function updateToolUI(group, stateOn){
+    var groupEl = document.querySelector('[data-tool-group="' + group + '"]');
+    if(!groupEl) return;
+    var onBtn  = groupEl.querySelector('[data-tool$="_on"]');
+    var offBtn = groupEl.querySelector('[data-tool$="_off"]');
+    if(stateOn){
+      onBtn.classList.add('active-on');
+      offBtn.classList.remove('active-off');
+    } else {
+      offBtn.classList.add('active-off');
+      onBtn.classList.remove('active-on');
+    }
+  }
+  function updateTelemetry(data){
+    if(typeof data.battery === 'number') updateBattery(data.battery);
+    if(data.state)    stateVal.textContent   = String(data.state).toUpperCase();
+    if(data.sprayer){
+      var s = String(data.sprayer).toLowerCase();
+      sprayerVal.textContent = s.toUpperCase();
+      lastSprayerState = (s === 'on');
+      updateToolUI('sprayer', lastSprayerState);
+    }
+    if(data.cutter){
+      var c = String(data.cutter).toLowerCase();
+      cutterVal.textContent = c.toUpperCase();
+      lastCutterState = (c === 'on');
+      updateToolUI('cutter', lastCutterState);
+    }
+    if(data.wifi){
+      var w = String(data.wifi).toLowerCase();
+      var isConn = (w === 'connected' || w === 'ok' || w === 'online');
+      setWifiStatus(isConn);
+      wifiVal.textContent = isConn ? 'CONNECTED' : 'DISCONNECTED';
+    }
+  }
+
+  /* ---------- MQTT Publish ---------- */
+  function publish(topic, payload){
+    if(!client || !client.connected){
+      log('Publish failed: MQTT not connected', 'error');
+      return false;
+    }
+    try {
+      client.publish(topic, payload, { qos: 0, retain: false });
+      setLastCmd(topic, payload);
+      log('PUB ' + topic + ' : ' + payload, 'info');
+      return true;
+    } catch(e){
+      log('Publish error: ' + e.message, 'error');
+      return false;
+    }
+  }
+
+  function flashButton(btn){
+    if(!btn) return;
+    btn.classList.add('active');
+    setTimeout(function(){ btn.classList.remove('active'); }, 250);
+  }
+
+  /* ---------- MQTT Connect ---------- */
+  function connect(){
+    log('Connecting to broker.hivemq.com:8884 (WSS) ...', 'info');
+    try {
+      var options = {
+        keepalive: 30,
+        clientId: CLIENT_PREFIX + Math.random().toString(16).substr(2, 8),
+        clean: true,
+        reconnectPeriod: 3000,
+        connectTimeout: 5000
+      };
+      client = mqtt.connect(BROKER_URL, options);
+
+      client.on('connect', function(){
+        setMqttStatus(true);
+        log('MQTT connected', 'success');
+        client.subscribe(TOPICS.status, { qos: 0 }, function(err){
+          if(err){ log('Subscribe error: ' + (err.message || err), 'error'); }
+          else  { log('Subscribed to ' + TOPICS.status, 'success'); }
+        });
+      });
+
+      client.on('reconnect', function(){
+        log('Reconnecting ...', 'warn');
+      });
+
+      client.on('close', function(){
+        setMqttStatus(false);
+      });
+
+      client.on('offline', function(){
+        setMqttStatus(false);
+        log('MQTT offline', 'warn');
+      });
+
+      client.on('error', function(err){
+        log('MQTT error: ' + (err.message || err), 'error');
+      });
+
+      client.on('message', function(topic, message){
+        var msg = message.toString();
+        log('RECV ' + topic + ' : ' + msg, 'success');
+        if(topic === TOPICS.status){
+          try {
+            var data = JSON.parse(msg);
+            updateTelemetry(data);
+          } catch(e){
+            log('Telemetry parse error: ' + e.message, 'error');
+          }
+        }
+      });
+    } catch(e){
+      log('Connect exception: ' + e.message, 'error');
+    }
+  }
+
+  /* ---------- Wire up Movement ---------- */
+  Array.prototype.forEach.call(document.querySelectorAll('[data-move]'), function(btn){
+    var handler = function(e){
+      e.preventDefault();
+      var move = btn.getAttribute('data-move');
+      if(publish(TOPICS.move, move)) flashButton(btn);
+    };
+    btn.addEventListener('click', handler);
+  });
+
+  /* ---------- Wire up Behavior ---------- */
+  Array.prototype.forEach.call(document.querySelectorAll('[data-behavior]'), function(btn){
+    btn.addEventListener('click', function(e){
+      e.preventDefault();
+      var b = btn.getAttribute('data-behavior');
+      if(publish(TOPICS.behavior, b)) flashButton(btn);
+    });
+  });
+
+  /* ---------- Wire up Tools ---------- */
+  Array.prototype.forEach.call(document.querySelectorAll('[data-tool]'), function(btn){
+    btn.addEventListener('click', function(e){
+      e.preventDefault();
+      var t = btn.getAttribute('data-tool');
+      publish(TOPICS.tool, t);
+      /* Optimistic UI update */
+      var group = btn.parentElement.getAttribute('data-tool-group');
+      if(t.indexOf('_on') > -1)  updateToolUI(group, true);
+      else                       updateToolUI(group, false);
+    });
+  });
+
+  /* ---------- Keyboard Shortcuts ---------- */
+  var keyMap = {
+    'ArrowUp':'forward', 'ArrowDown':'backward',
+    'ArrowLeft':'left',  'ArrowRight':'right',
+    ' ':'stop'
+  };
+  document.addEventListener('keydown', function(e){
+    if(e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+    var move = keyMap[e.key];
+    if(move){
+      e.preventDefault();
+      publish(TOPICS.move, move);
+      flashButton(document.querySelector('[data-move="' + move + '"]'));
+    }
+  });
+
+  /* ---------- Boot ---------- */
+  log('Dashboard initialized', 'success');
+  log('Broker: ' + BROKER_URL, 'info');
+  log('Pub: ' + TOPICS.move + ' , ' + TOPICS.behavior + ' , ' + TOPICS.tool, 'info');
+  log('Sub: ' + TOPICS.status, 'info');
+  log('Awaiting telemetry from spider robot ...', 'info');
+  connect();
+
+})();
+</script>
+</body>
+</html>
+)rawliteral";
+
+#endif /* DASHBOARD_HTML_H */
