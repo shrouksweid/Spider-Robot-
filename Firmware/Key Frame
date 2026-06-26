@@ -1,0 +1,14 @@
+#ifndef KEYFRAME_H
+#define KEYFRAME_H
+
+#include "Position.h"
+
+struct KeyFrame
+{
+    Position FrontLeft;
+    Position FrontRight;
+    Position RearLeft;
+    Position RearRight;
+};
+
+#endif
